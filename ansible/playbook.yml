@@ -1,0 +1,71 @@
+---
+- name: 0a. Bootstrap Python on DB Server (Alpine)
+  hosts: db_servers
+  become: yes
+  gather_facts: false # Must be false, requires Python
+  tasks:
+    - name: Install Python 3 (using apk)
+      raw: apk add --no-cache python3
+      register: python_install
+      changed_when: "'OK' in python_install.stdout" # <-- This is the corrected line
+
+- name: 0b. Bootstrap Python on API Server (Ubuntu)
+  hosts: api_servers
+  become: yes
+  gather_facts: false # Must be false, requires Python
+  tasks:
+    - name: Update apt cache (raw)
+      raw: apt-get update
+      changed_when: false
+    - name: Install Python 3 (using apt)
+      raw: apt-get install -y python3
+      register: python_install
+      changed_when: "'is already the newest version' not in python_install.stdout"
+
+# --- Your original playbook starts here ---
+
+- name: 1. Configure Database Server
+  hosts: db_servers
+  become: yes
+  gather_facts: false # This was already correct
+
+  tasks:
+    - name: Wait for PostgreSQL to be ready
+      shell: "pg_isready -U admin -d testbed"
+      register: db_status
+      until: db_status.stdout.find("accepting connections") != -1
+      retries: 10
+      delay: 5
+      changed_when: false
+
+- name: 2. Configure API Service
+  hosts: api_servers
+  become: yes
+  # This will now gather facts successfully
+
+  tasks:
+    - name: Wait for API service to be fully up
+      uri:
+        url: http://localhost:8080/api/health
+        status_code: 200
+      retries: 10
+      delay: 5
+      register: api_health
+      until: api_health.status == 200
+
+- name: 3. Run End-to-End Smoke Test (from this machine)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: SMOKE TEST - Check if the API is accessible from the host
+      uri:
+        url: http://localhost:8081/api/health # Check the mapped port
+        status_code: 200
+      register: smoke_test
+
+    - name: Print success message
+      debug:
+        msg: "SUCCESS: The 'Orchestrator' testbed is up and validated!"
+      when: smoke_test.status == 200
